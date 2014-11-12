@@ -30,10 +30,30 @@
 +W?BWWB--- \
 "
 
+//pattern 9 fixed regression kgs.tst 90, did not harm against gnugo l0
+#define PATTERN_3x3_DEFAULTS2 " \
++*BWBEE??? \
++*BWEEE?E? \
++*BW?BE?E? \
++BBWWEE?E? \
++*BW?W???? \
+-*BW?WW?E? \
+-*BW?WE?W? \
+-*BW?WW?W? \
++*?B?WWwww \
++*BE?W?--- \
++*?B?bW--- \
++B?BW??_-- \
++W?BW?b--- \
++W?BWWB--- \
++BWEWEE--- \
+"
+
 #include <string>
 #include <list>
 #include <boost/cstdint.hpp>
 #include "Go.h"
+#include <fstream>
 
 /** Patterns.
  * Matching and manipulation of patterns.
@@ -138,6 +158,7 @@ namespace Pattern
       bool loadPatternString(std::string patternstring);
       /** Load a the default patterns. */
       bool loadPatternDefaults() { return this->loadPatternString(PATTERN_3x3_DEFAULTS); };
+      bool loadPatternDefaults2() { return this->loadPatternString(PATTERN_3x3_DEFAULTS2); };
 
     private:
       unsigned char *const table; //assume sizeof(char)==1
@@ -274,6 +295,7 @@ namespace Pattern
   {
     public:
       /** Create a pattern from a given board position. */
+      Circular(Pattern::CircularDictionary *dict, int sz); //for binary read
       Circular(Pattern::CircularDictionary *dict, const Go::Board *board, int pos, int sz);
       Circular(Pattern::CircularDictionary *dict, std::string fromString);
       Circular(boost::uint32_t hash_tmp[PATTERN_CIRC_32BITPARTS],int size_tmp):size(size_tmp) {
@@ -296,6 +318,8 @@ namespace Pattern
       
       /** Count the number of stones to get an idea of the uniqunes of the pattern */
       int countStones(Pattern::CircularDictionary *dict);
+      int countNonEmpty(Pattern::CircularDictionary *dict);
+      int countNonOffboard(Pattern::CircularDictionary *dict);
       
       /** Determine if two patterns are equal. */
       bool operator==(const Pattern::Circular other) const;
@@ -319,7 +343,8 @@ namespace Pattern
        */
       void convertToSmallestEquivalent(Pattern::CircularDictionary *dict);
       std::size_t hashf() const {size_t t=0; for (int i=0;i<PATTERN_CIRC_32BITPARTS;i++) {t+=(2*i+1)*hash[i];}; return t+size*PATTERN_CIRC_32BITPARTS;};
-      
+      void writeTo(std::ofstream &fout) const;
+      void readFrom(std::ifstream &fin) const;
     private:
       Circular(int sz=0) : size(sz) {};
       

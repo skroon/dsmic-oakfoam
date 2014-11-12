@@ -10,6 +10,7 @@
 
 #define BERNOULLI_A 0.0
 #define BERNOULLI_B 0.0
+#define KL_UCB_ENABLED 0
 #define WEIGHT_SCORE 0.0
 #define RANDOM_F 0.0
 
@@ -58,6 +59,7 @@
 #define UCT_TERMINAL_HANDLING true
 #define UCT_PRIOR_UNPRUNE_FACTOR 0.00
 #define UCT_RAVE_UNPRUNE_FACTOR 0.00
+#define UCT_RAVE_OTHER_UNPRUNE_FACTOR 0.00
 #define UCT_EARLYRAVE_UNPRUNE_FACTOR 0.00
 #define UCT_RAVE_UNPRUNE_DECAY 0.00
 #define UCT_OLDMOVE_UNPRUNE_FACTOR 0.00
@@ -66,6 +68,7 @@
 #define UCT_AREA_OWNER_FACTOR_A 0.00
 #define UCT_AREA_OWNER_FACTOR_B 0.33333
 #define UCT_AREA_OWNER_FACTOR_C 1.00
+#define UCT_AREA_CORRELATION_STATISTICS false
 #define UCT_REPRUNE_FACTOR 0.00
 #define UCT_FACTOR_CIRCPATTERN 0.00
 #define UCT_FACTOR_CIRCPATTERN_EXPONENT 1.00
@@ -108,7 +111,6 @@
 #define PLAYOUT_NAKADE5_ENABLED false
 #define PLAYOUT_FILLBOARD_ENABLED true
 #define PLAYOUT_FILLBOARD_N 5
-#define PLAYOUT_CIRCREPLACE_ENABLED false
 #define PLAYOUT_FILLBOARD_BESTCIRC_ENABLED false
 #define PLAYOUT_RANDOMQUICK_BESTCIRC_N 0
 #define PLAYOUT_RANDOM_WEIGHT_TERRITORY_N 0
@@ -124,6 +126,8 @@
 #define PLAYOUT_AVOID_LBMF_P 0.0
 #define PLAYOUT_AVOID_LBRF1_P2 0.0
 #define PLAYOUT_AVOID_LBMF_P2 0.0
+#define PLAYOUT_AVOID_BPR_P 0.0
+#define PLAYOUT_AVOID_BPR_P2 0.0
 #define PLAYOUT_LGRF1O_ENABLED true
 #define PLAYOUT_LGRF2_ENABLED true
 #define PLAYOUT_LGRF2_SAFE_ENABLED false
@@ -134,6 +138,7 @@
 #define PLAYOUT_RANDOM_APPROACH_P 0.00
 #define PLAYOUT_LAST2LIBATARI_ENABLED true
 #define PLAYOUT_LAST2LIBATARI_COMPLEX true
+#define PLAYOUT_LAST2LIBATARI_ALLOW_DIFFERENT_GROUPS false
 #define PLAYOUT_POOLRAVE_ENABLED false
 #define PLAYOUT_POOLRAVE_CRITICALITY false
 #define PLAYOUT_CRITICALITY_RANDOM_N 0
@@ -220,6 +225,7 @@ namespace Pattern
 #include "Playout.h"
 #include "Benson.h"
 #include "Worker.h"
+
 //from "DecisionTree.h":
 class DecisionTree;
 #include "../gtp/Gtp.h"
@@ -228,6 +234,14 @@ class DecisionTree;
   class Web;
 #endif
 
+class MoveCircHash
+{
+  public:
+    std::size_t operator() (const MoveCirc& b) const
+    {
+      return b.hashf();
+    }
+};
 
   
 
@@ -247,13 +261,14 @@ class Engine
       ANYCAPTURE,
       CIRCPATTERN_QUICK,
       FILL_BOARD,
+      RANDOM_QUICK_TERRITORY,
+      RANDOM_REWEIGHTED_QUICK,
       RANDOM_QUICK,
       RANDOM,
       FILL_WEAK_EYE,
       PASS,
       REPLACE_WITH_CIRC,
       RANDOM_QUICK_CIRC,
-      RANDOM_QUICK_TERRITORY,
       LGRF2,
       STATISTICS_NUM     //is set to the number of entries !!
     };
@@ -295,7 +310,7 @@ class Engine
     void clearBoard();
     /** Get the current komi. */
     float getKomi() const { return komi; };
-    float getScoreKomi() const;
+    float getScoreKomi();
     float getHandiKomi() const;
     /** Set the current komi. */
     void setKomi(float k);
@@ -340,17 +355,63 @@ class Engine
     long statisticsSum() {int i; long sum=0; for (i=0;i<STATISTICS_NUM;i++) sum+=statistics[i]; return sum;}
     long getStatistics(int i) {return statistics[i]*1000/(statisticsSum()+1);} //+1 avoid crash
     Go::TerritoryMap *getTerritoryMap() const {return territorymap;}
+    void ProbabilityMoveAs(int pos, int move_number) {if (pos>=0) probabilitymap->setMoveAsFirst(pos,move_number);}
+    void ProbabilityClean() {probabilitymap->resetplayed();}
+    float getProbabilityMoveAt(int pos) {if (pos>=0) return probabilitymap->getMoveAs(pos)/boardsize/boardsize; else return 1.0;}
     float getCorrelation(int pos) const {return (correlationmap->get(pos)).getCorrelation();}
+    float getAreaCorrelation(Go::Move m);
     float getOldMoveValue(Go::Move m);
     void getOnePlayoutMove(Go::Board *board, Go::Color col, Go::Move *move);
 
     void addpresetplayout(float p) {presetplayouts+=p; presetnum++;}
+    
+    EqMoves  * addMoveCirc(MoveCirc *m, Tree *t)  
+      { 
+        lock_move_circ.lock();
+        EqMoves *tt=&circ_move[*m];
+        tt->lock();
+        tt->insert(t);
+        tt->unlock();
+        lock_move_circ.unlock();
+        return tt;
+      }
+    void removeMoveCirc(MoveCirc *m, Tree *t)  
+    {
+      lock_move_circ.lock();
+      if (m!=NULL && circ_move.count(*m)>0)
+      {
+        circ_move[*m].lock();
+        circ_move[*m].erase(t);
+        if (circ_move[*m].size()==0)
+          circ_move.erase(*m);
+        else
+          circ_move[*m].unlock();
+      }
+      lock_move_circ.unlock();
+    }
+    int countMoveCirc(MoveCirc *m) 
+    {
+      if (m!=NULL && circ_move.count(*m)>0)
+      {
+        return circ_move[*m].size();
+      }
+      return 0;
+    }
+    EqMoves  * getMoveCirc(MoveCirc *m)
+    {
+      if (m!=NULL && circ_move.count(*m)>0)
+        return &circ_move[*m];
+      return NULL;
+    }
+    
   private:
+    //boost::object_pool<Go::Board> pool_board;
     Gtp::Engine *gtpe;
     std::string longname;
     Go::Board *currentboard;
     float komi;
     float komi_handicap;
+    float recalc_dynkomi;
     int boardsize;
     Time *time;
     Tree *movetree;
@@ -365,12 +426,23 @@ class Engine
     Playout *playout;
     volatile bool stopthinking;
     volatile bool stoppondering;
+    volatile bool stop_called;
+    //volatile bool isWaitingForStop;
     Worker::Pool *threadpool;
     Go::TerritoryMap *territorymap;
+    Go::TerritoryMap **area_correlation_map;
+    Go::MoveProbabilityMap *probabilitymap;
     Go::ObjectBoard<Go::CorrelationData> *correlationmap;
-    
-    long statistics[STATISTICS_NUM];
 
+    #ifdef with_unordered
+      std::unordered_map <MoveCirc,EqMoves,MoveCircHash> circ_move;
+    #else
+      std::map <MoveCirc,EqMoves> circ_move;
+    #endif
+    long statistics[STATISTICS_NUM];
+    boost::mutex lock_move_circ;
+
+    
     bool isgamefinished;
     std::list<DecisionTree*> decisiontrees;
 
@@ -420,7 +492,8 @@ class Engine
         MPICMD_BOOKCLEAR,
         MPICMD_BOOKLOAD,
         MPICMD_CLEARTREE,
-        MPICMD_GENMOVE
+        MPICMD_GENMOVE,
+        MPICMD_PONDER
       };
       
       class MpiHashTable
@@ -462,6 +535,8 @@ class Engine
       void mpiSendString(int destrank, std::string input);
       std::string mpiRecvString(int srcrank);
       void mpiGenMove(Go::Color col);
+      void mpiPonder(Go::Color col);
+      void mpiSyncWaitStop();
       bool mpiSyncUpdate(bool stop=false);
       void mpiBuildDerivedTypes();
       void mpiFreeDerivedTypes();
@@ -474,7 +549,7 @@ class Engine
     void chooseSubTree(Go::Move move);
     
     void doNPlayouts(int n);
-    void doPlayout(Worker::Settings *settings, Go::BitBoard *firstlist, Go::BitBoard *secondlist, Go::BitBoard *earlyfirstlist, Go::BitBoard *earlysecondlist);
+    void doPlayout(Worker::Settings *settings, Go::IntBoard *firstlist, Go::IntBoard *secondlist, Go::IntBoard *earlyfirstlist, Go::IntBoard *earlysecondlist);
     void displayPlayoutLiveGfx(int totalplayouts=-1, bool livegfx=true);
     void doSlowUpdate();
     
@@ -512,6 +587,8 @@ class Engine
     static void gtpGenMove(void *instance, Gtp::Engine* gtpe, Gtp::Command* cmd);
     static void gtpGenMoveCleanup(void *instance, Gtp::Engine* gtpe, Gtp::Command* cmd);
     static void gtpRegGenMove(void *instance, Gtp::Engine* gtpe, Gtp::Command* cmd);
+    static void gtpRegOwnerAt(void *instance, Gtp::Engine* gtpe, Gtp::Command* cmd);
+    static void gtpSgCompareFloat(void *instance, Gtp::Engine* gtpe, Gtp::Command* cmd);
     static void gtpShowBoard(void *instance, Gtp::Engine* gtpe, Gtp::Command* cmd);
     static void gtpFinalScore(void *instance, Gtp::Engine* gtpe, Gtp::Command* cmd);
     static void gtpFinalStatusList(void *instance, Gtp::Engine* gtpe, Gtp::Command* cmd);
@@ -535,7 +612,8 @@ class Engine
     static void gtpListAllPatterns(void *instance, Gtp::Engine* gtpe, Gtp::Command* cmd);
     static void gtpLoadFeatureGammas(void *instance, Gtp::Engine* gtpe, Gtp::Command* cmd);
     static void gtpSaveFeatureGammas(void *instance, Gtp::Engine* gtpe, Gtp::Command* cmd);
-    static void gtpSaveFeatureGammasInline(void *instance, Gtp::Engine* gtpe, Gtp::Command* cmd);
+    static void gtpSaveFeatureCircularBinary(void *instance, Gtp::Engine* gtpe, Gtp::Command* cmd);
+    static void gtpLoadFeatureCircularBinary(void *instance, Gtp::Engine* gtpe, Gtp::Command* cmd);
     static void gtpLoadCircPatterns(void *instance, Gtp::Engine* gtpe, Gtp::Command* cmd);
     static void gtpLoadCircPatternsNot(void *instance, Gtp::Engine* gtpe, Gtp::Command* cmd);
     static void gtpSaveCircPatternValues(void *instance, Gtp::Engine* gtpe, Gtp::Command* cmd);
@@ -589,13 +667,19 @@ class Engine
     static void gtpDoBenchmark(void *instance, Gtp::Engine* gtpe, Gtp::Command* cmd);
     static void gtpShowCriticality(void *instance, Gtp::Engine* gtpe, Gtp::Command* cmd);
     static void gtpShowTerritory(void *instance, Gtp::Engine* gtpe, Gtp::Command* cmd);
+    static void gtpShowTerritoryAt(void *instance, Gtp::Engine* gtpe, Gtp::Command* cmd);
+    static void gtpShowTerritoryError(void *instance, Gtp::Engine* gtpe, Gtp::Command* cmd);
+    static void gtpShowMoveProbability(void *instance, Gtp::Engine* gtpe, Gtp::Command* cmd);
     static void gtpShowCorrelationMap(void *instance, Gtp::Engine* gtpe, Gtp::Command* cmd);
     static void gtpShowRatios(void *instance, Gtp::Engine* gtpe, Gtp::Command* cmd);
+    static void gtpShowTreePlayouts(void *instance, Gtp::Engine* gtpe, Gtp::Command* cmd);
     static void gtpShowUnPrune(void *instance, Gtp::Engine* gtpe, Gtp::Command* cmd);
     static void gtpShowUnPruneColor(void *instance, Gtp::Engine* gtpe, Gtp::Command* cmd);
+    static void gtpShowOwnRatios(void *instance, Gtp::Engine* gtpe, Gtp::Command* cmd);
     static void gtpShowRAVERatios(void *instance, Gtp::Engine* gtpe, Gtp::Command* cmd);
     static void gtpShowRAVERatiosColor(void *instance, Gtp::Engine* gtpe, Gtp::Command* cmd);
     static void gtpShowRAVERatiosOther(void *instance, Gtp::Engine* gtpe, Gtp::Command* cmd);
+    static void gtpCPUtime(void *instance, Gtp::Engine* gtpe, Gtp::Command* cmd);
 };
 
 #endif

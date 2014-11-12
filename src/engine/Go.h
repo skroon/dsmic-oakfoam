@@ -2,14 +2,16 @@
 #define DEF_OAKFOAM_GO_H
 
 #include <string>
-#include <list>
+#include <forward_list>
 #include <unordered_set>
 #include <boost/pool/pool.hpp>
 #include <boost/pool/pool_alloc.hpp>
 #include <boost/pool/object_pool.hpp>
 #include <boost/cstdint.hpp>
 
-//can be set or unordered_set last is faster
+#include "../gtp/Gtp.h"
+
+//can be set or unordered_set last is faster (this was probably wrong, it is only faster if fetch by value is needed, and only one is needed in erase(group))
 #define ourset unordered_set
 
 //from "Features.h":
@@ -31,14 +33,15 @@ class Random;
 #define P_SW (P_S+P_W)
 #define P_SE (P_S+P_E)
 
+//changed ordering to hopefully hit the cache better 2/15/2014
 #define foreach_adjacent(__pos, __adjpos, __body) \
   { \
     int __intpos = __pos; \
     int __adjpos; \
-    __adjpos = __intpos+P_N; { __body }; \
-    __adjpos = __intpos+P_S; { __body }; \
     __adjpos = __intpos+P_E; { __body }; \
     __adjpos = __intpos+P_W; { __body }; \
+    __adjpos = __intpos+P_S; { __body }; \
+    __adjpos = __intpos+P_N; { __body }; \
   }
 
 #define foreach_onandadj(__pos, __adjpos, __body) \
@@ -46,48 +49,51 @@ class Random;
     int __intpos = __pos; \
     int __adjpos; \
     __adjpos = __intpos; { __body }; \
-    __adjpos = __intpos+P_N; { __body }; \
-    __adjpos = __intpos+P_S; { __body }; \
     __adjpos = __intpos+P_E; { __body }; \
     __adjpos = __intpos+P_W; { __body }; \
+    __adjpos = __intpos+P_S; { __body }; \
+    __adjpos = __intpos+P_N; { __body }; \
   }
 
 #define foreach_adjdiag(__pos, __adjpos, __body) \
   { \
     int __intpos = __pos; \
     int __adjpos; \
-    __adjpos = __intpos+P_N; { __body }; \
-    __adjpos = __intpos+P_S; { __body }; \
     __adjpos = __intpos+P_E; { __body }; \
     __adjpos = __intpos+P_W; { __body }; \
-    __adjpos = __intpos+P_NE; { __body }; \
+    __adjpos = __intpos+P_SW; { __body }; \
+    __adjpos = __intpos+P_S; { __body }; \
     __adjpos = __intpos+P_SE; { __body }; \
     __adjpos = __intpos+P_NW; { __body }; \
-    __adjpos = __intpos+P_SW; { __body }; \
+    __adjpos = __intpos+P_N; { __body }; \
+    __adjpos = __intpos+P_NE; { __body }; \
   }
 
 #define foreach_diagonal(__pos, __adjpos, __body) \
   { \
     int __intpos = __pos; \
     int __adjpos; \
-    __adjpos = __intpos+P_NE; { __body }; \
+    __adjpos = __intpos+P_SW; { __body }; \
     __adjpos = __intpos+P_SE; { __body }; \
     __adjpos = __intpos+P_NW; { __body }; \
-    __adjpos = __intpos+P_SW; { __body }; \
+    __adjpos = __intpos+P_NE; { __body }; \
   }
 
 /** Go-related objects. */
 namespace Go
 {
   /** The memory allocator used for int's. */
-  typedef std::allocator<int> allocator_int;
+  //typedef std::allocator<int> allocator_int;
   //typedef boost::fast_pool_allocator<int> allocator_int;
   class Group;
   /** The memory allocator used for Go::Group pointers. */
   typedef std::allocator<Go::Group*> allocator_groupptr;
   //typedef boost::fast_pool_allocator<Go::Group*> allocator_groupptr;
   /** A list of int's, using the specified memory allocator. */
-  typedef std::list<int,Go::allocator_int> list_int;
+
+  // 15.6.2014 fast_pool is much slower!!
+  //typedef std::list<int,boost::fast_pool_allocator<int>> list_int;
+  typedef std::list<int> list_int;
 
   /** Go colors. */
   enum Color
@@ -138,6 +144,16 @@ namespace Go
     return dx+dy;
   };
 
+  inline static int maxDist(int x1, int y1, int x2, int y2)
+  {
+    int dx=abs(x1-x2);
+    int dy=abs(y1-y2);
+    if (dx>dy)
+      return dx;
+    else
+      return dy;
+  };
+
   /** Get the circular distance between two points. */
   inline static int circDist(int x1, int y1, int x2, int y2)
   {
@@ -148,7 +164,8 @@ namespace Go
     else
       return dx+dy+dy;
   };
-  
+  inline const char *getColorName(Go::Color col) {if (col==Go::EMPTY) return "empty"; if (col==Go::WHITE) return "white"; if (col==Go::BLACK) return "black"; return "offboard";};
+      
   /** Go-related Exceptions.
    * For exceptions such as an illegal move being attempted.
    */
@@ -210,6 +227,38 @@ namespace Go
     private:
       const int size,sizesq,sizedata;
       bool *const data;
+  };
+
+  /** Board with a bit for each position. */
+  class IntBoard
+  {
+    public:
+      /** Create an instance with given board size. */
+      IntBoard(int s);
+      ~IntBoard();
+      
+      /** Get the value of a position. */
+      inline int get(int pos) const { return data[pos]; };
+      inline bool getb(int pos) const { return bdata[pos]; };
+      /** Set the value of a position. */
+      inline void set(int pos, int val=1, bool b=false) { data[pos]=val; bdata[pos]=b;};
+      inline void add(int pos, int val=1) { data[pos]=data[pos]+val;};
+      /** Clear a position.
+       * Set the position to false.
+       */
+      inline void clear(int pos) { this->set(pos,0); };
+      /** Fill the whole board with a given value. */
+      inline void fill(int val) { for (int i=0;i<sizedata;i++) data[i]=val; };
+      /** Clear the whole board. */
+      inline void clear() { this->fill(0); };
+
+      /** Create a copy of this board. */
+      Go::IntBoard *copy() const;
+      
+    private:
+      const int size,sizesq,sizedata;
+      int *const data;
+      bool *const bdata;
   };
 
   class CorrelationData
@@ -286,11 +335,12 @@ namespace Go
         if (type==NORMAL)
           throw Go::Exception("invalid type");
       };
-      
       /** Get the color of this move. */
       inline Go::Color getColor() const {return color;};
       /** Get the position of this move. */
       inline int getPosition() const {return pos;};
+
+//this does not look ok?!
       /** Get the x-coordinate of this move. */
       inline int getX(int boardsize) const {return (this->isPass()||this->isResign()?pos:Go::Position::pos2x(pos,boardsize));};
       /** Get the y-coordinate of this move. */
@@ -395,11 +445,37 @@ namespace Go
       float getPositionOwner(int pos) const;
       /** Decay the statistics. */
       void decay(float factor);
+      float getPlayouts() {return boards;};
       
     private:
       const int size, sizedata;
       float boards;
       ObjectBoard<float> *blackowns,*whiteowns;
+  };
+
+  //this class tries to find the mean value of moves, till pos is played in the playouts
+  //if small, the pos is played with a high probability.
+  class MoveProbabilityMap
+  {
+    public:
+      /** Create an instance of given board size. */
+      MoveProbabilityMap(int sz);
+      ~MoveProbabilityMap();
+
+      
+      /** Add an owner for a specific position. */
+      void setMoveAs(int pos, int move_number);
+      void setMoveAsFirst(int pos, int move_number) {if (played->get(pos)==0) {played->set(pos,1); setMoveAs(pos,move_number);}}
+      /** Get the owner for a specific position. */
+      float getMoveAs(int pos) const;
+      /** Decay the statistics. */
+      void decay(float factor);
+      void resetplayed() {played->fill(0);}
+      
+    private:
+      const int size, sizedata;
+      ObjectBoard<long> *move_num,*count;
+      ObjectBoard<int> *played;
   };
   
   class Group;
@@ -429,18 +505,18 @@ namespace Go
       /** Get the color of this group. */
       Go::Color getColor() const {return color;};
       /** Get the position of the key stone of this position. */
-      int getPosition() const {return position;};
+      inline int getPosition() const {return position;};
      
       /** Set the parent group for this group. */
       void setParent(Go::Group *p) { parent=p; };
       /** Get the root group for this group. */
-      Go::Group *find() const
+      inline Go::Group *find() 
       {
         if (parent==NULL)
           return (Go::Group *)this;
         else
-          //return (parent=parent->find());
-          return parent->find();
+          return (parent=parent->find());
+          //return parent->find();
       };
       /** Merge two groups.
        * Assumed that both groups are roots.
@@ -455,6 +531,9 @@ namespace Go
         libpossum+=othergroup->libpossum;
         libpossumsq+=othergroup->libpossumsq;
         adjacentgroups.splice(adjacentgroups.end(),*othergroup->getAdjacentGroups());
+        //adjacentgroups.insert(adjacentgroups.end(),othergroup->getAdjacentGroups()->begin(),othergroup->getAdjacentGroups()->end());
+        //adjacentgroups.insert(othergroup->getAdjacentGroups()->begin(),othergroup->getAdjacentGroups()->end());
+        
       };
       /** Determine if this group is a root. */
       inline bool isRoot() const { return (parent==NULL); };
@@ -474,22 +553,26 @@ namespace Go
       inline void removePseudoLiberty(int pos) { pseudoliberties--; libpossum-=pos; libpossumsq-=pos*pos; };
       inline void removePseudoEnd() { pseudoends--;};
       /** Determine if this group is in atari. */
-      inline bool inAtari() const { return (pseudoliberties>0 && (pseudoliberties*libpossumsq)==(libpossum*libpossum)); };
+      inline bool inAtari() const { return ((pseudoliberties*libpossumsq)==(libpossum*libpossum) && pseudoliberties>0); };  //pseudoliberties==0 should not happen?!
       /** Get the last remaining postion of a group in atari.
        * If the group is not in atari, -1 is returned.
        */
       inline int getAtariPosition() const { if (this->inAtari()) return libpossum/pseudoliberties; else return -1; };
       /** Add the orthogonally adjacent empty pseudo liberties. */
-      void addTouchingEmpties();
+      inline void addTouchingEmpties();
       /** Determine if given position is one of the last two liberties. */
-      bool isOneOfTwoLiberties(int pos) const;
+      bool isOneOfTwoLiberties(int pos) const __attribute__((hot));
       /** Get the other of the last two liberties.
        * If the group doesn't have two liberties, -1 is returned.
        */
-      int getOtherOneOfTwoLiberties(int pos) const;
+      int getOtherOneOfTwoLiberties(int pos) const  __attribute__((hot));
+      
       /** Get a list of the adjacent groups to this group. */
-      std::list<int,Go::allocator_int> *getAdjacentGroups() { return &adjacentgroups; };
-    
+      //std::list<int,Go::allocator_int> *getAdjacentGroups() { return &adjacentgroups; };
+      list_int *getAdjacentGroups() { return &adjacentgroups; };
+      inline int getLibpossum() {return libpossum;}
+      inline int getLibpossumsq() {return libpossumsq;}
+      inline Go::Board *const getBoard() {return board;}
     private:
       Go::Board *const board;
       const Go::Color color;
@@ -504,7 +587,7 @@ namespace Go
       int libpossum;
       int libpossumsq;
       
-      std::list<int,Go::allocator_int> adjacentgroups;
+      list_int adjacentgroups;
   };
   
   /** Go board. */
@@ -534,6 +617,7 @@ namespace Go
       /** Create a board of given size. */
       Board(int s);
       ~Board();
+      int getNextPrimePositionMax() {return nextprime;}
       
       /** Create a copy of this board. */
       Go::Board *copy() const;
@@ -597,28 +681,44 @@ namespace Go
       inline bool onBoard(int pos) const { return (data[pos].color!=Go::OFFBOARD); };
       
       /** Make a move on this board. */
-      void makeMove(Go::Move move);
+      void makeMove(Go::Move move,Gtp::Engine* gtpe=NULL);
       /** Determine is the given move is a legal move. */
-      bool validMove(Go::Move move) const;
-      
+      inline bool validMove(Go::Move move) const
+        {
+          Go::BitBoard *validmoves=(move.getColor()==Go::BLACK?blackvalidmoves:whitevalidmoves);
+          //return move.isPass() || move.isResign() || validmoves->get(move.getPosition());
+          return (move.getPosition()<0) || validmoves->get(move.getPosition()); //faster and more correct, as no neg value allowed for get call!!!
+        };
+      inline bool validMove(Go::Color col, int pos) const
+        {
+          Go::BitBoard *validmoves=(col==Go::BLACK?blackvalidmoves:whitevalidmoves);
+          //return move.isPass() || move.isResign() || validmoves->get(move.getPosition());
+          return (pos<0) || validmoves->get(pos); //faster and more correct, as no neg value allowed for get call!!!
+        };
+       
       /** Get the number of legal moves currently available. */
       int numOfValidMoves(Go::Color col) const { return (col==Go::BLACK?blackvalidmovecount:whitevalidmovecount); };
+      int numOfValidMoves() const {return (blackvalidmovecount+whitevalidmovecount)/2;}
       /** Get a board showing which moves are legal. */
       Go::BitBoard *getValidMoves(Go::Color col) const { return (col==Go::BLACK?blackvalidmoves:whitevalidmoves); };
       
       /** Compute the current score. */
       float score(Parameters* params=NULL);
       /** Determine if the given position is a weak eye for the given color. */
-      bool weakEye(Go::Color col, int pos) const;
+      bool weakEye(Go::Color col, int pos, bool veryweak=0) const;
       /** Determine if the given position has an eye where two weak eyes are shared from two groups. */
       bool twoGroupEye(Go::Color col, int pos) const;
       /** Determine if the given position is surrounded by a single group of the given color. */
       bool strongEye(Go::Color col, int pos) const;
       /** Get the number of empty positions orthogonally adjacent to the given position. */
-      int touchingEmpty(int pos) const;
+      int touchingEmpty(int pos) const {int lib=0; foreach_adjacent(pos,p,{if (this->getColor(p)==Go::EMPTY) lib++;});
+  
+          return lib;
+        };
       int diagonalEmpty(int pos) const;
       /** Get the number of empty positions in the eight positions surrounding the given position. */
       int surroundingEmpty(int pos) const;
+      int surroundingEmptyPlus(int pos) const;
       /** Get the number of each color in the orthogonally adjacent positions to the given position. */
       void countAdjacentColors(int pos, int &empty, int &black, int &white, int &offboard) const;
       /** Get the number of each color in the diagonally adjacent positions to the given position. */
@@ -629,7 +729,7 @@ namespace Go
       void turnSymmetryOn() { symmetryupdated=true;currentsymmetry=this->computeSymmetry(); };
       
       /** Set the features for the board and whether the gamma values should be updated incrementally. */
-      void setFeatures(Features *feat, bool inc) { features=feat; incfeatures=inc; markchanges=true; this->refreshFeatureGammas(); };
+      void setFeatures(Features *feat, bool inc, bool mchanges=true) { features=feat; incfeatures=inc; markchanges=mchanges; this->refreshFeatureGammas(); };
       /** Get the sum ofthe gamma values for this board. */
       float getFeatureTotalGamma() const { return (nexttomove==Go::BLACK?blacktotalgamma:whitetotalgamma); };
       /** Get the gamma value for a position on this board. */
@@ -664,20 +764,173 @@ namespace Go
       static std::list<Go::Board::SymmetryTransform> getSymmetryTransformsFromPrimaryStatic(Go::Board::Symmetry sym);
       
       /** Determine is the given move is a capture. */
-      bool isCapture(Go::Move move) const;
+      inline bool isCapture(Go::Move move) const
+      {
+        Go::Color col=move.getColor();
+        int pos=move.getPosition();
+        foreach_adjacent(pos,p,{
+          if (this->inGroup(p) && col!=this->getColor(p))
+          {
+            Go::Group *group=this->getGroup(p);
+            if (//col!=group->getColor() && 
+                group->inAtari())
+              return true;
+          }
+        });
+        return false;
+      };
       /** Determine is the given move is an extension. */
       bool isExtension(Go::Move move) const;
+      bool isExtension2lib(Go::Move move, bool checkother=true) const;
+      bool isApproach(Go::Move move, int other[4]) const;
       /** Determine is the given move is a self-atari. */
-      bool isSelfAtari(Go::Move move) const;
+      inline bool isSelfAtari(Go::Move move) const {return this->isSelfAtariOfSize(move,0);};
       /** Determine is the given move is a self-atari of a group of a minimum size. */
-      bool isSelfAtariOfSize(Go::Move move, int minsize=0, bool complex=false) const;
+      inline bool isSelfAtariOfSize(Go::Move move, int minsize=0, bool complex=false) const
+{
+  Go::Color col=move.getColor();
+  int pos=move.getPosition();
+
+  if (this->touchingEmpty(pos)>1 || this->isCapture(move))
+    return false;
+
+  int libpos=-1;
+  int groupsize=1;
+  int groupbent4indicator=this->getPseudoDistanceToBorder(pos);
+  Go::Group *groups_used[4];
+  int groups_used_num=0;
+  int usedneighbours=0;
+  int attach_group_pos=-1;
+  int capturedstones=0;
+  foreach_adjacent(pos,p,{
+    if (this->inGroup(p))
+    {
+      Go::Group *group=this->getGroup(p);
+      if (col==group->getColor())
+      {
+        if (!(group->inAtari() || group->isOneOfTwoLiberties(pos)))
+          return false; // attached group has more than two libs
+        attach_group_pos=p;
+        usedneighbours++;
+        bool found=false;
+        for (int i=0;i<groups_used_num;i++)
+        {
+          if (groups_used[i]==group)
+          {
+            found=true;
+            break;
+          }
+        }
+        if (!found)
+        {
+          groups_used[groups_used_num]=group;
+          groups_used_num++;
+          int otherlib=group->getOtherOneOfTwoLiberties(pos);
+          //fprintf(stderr,"otherlib %d\n",otherlib);
+          if (otherlib!=-1)
+          {
+            if (libpos==-1)
+              libpos=otherlib;
+            else if (libpos!=otherlib)
+              return false; // at least 2 libs
+          }
+          groupsize+=group->numOfStones();
+          groupbent4indicator+=group->numOfPseudoBorderDist();
+          //fprintf(stderr,"groupsize now %d %d\n",groupsize,groupbent4indicator);
+        }
+      }
+      else
+      {
+        //more than on stone is captured, so not self atari
+        if (group->inAtari())
+          capturedstones+=group->numOfStones();
+        if (capturedstones>1)
+        {
+          //fprintf(stderr,"group catched of size more than 1\n");
+          return false;
+        }
+      }
+    }
+    else if (this->getColor(p)==Go::EMPTY)
+    {
+      if (libpos==-1)
+        libpos=p;
+      else if (libpos!=p)
+        return false; // at least 2 libs
+    }
+  });
+  
+  if (groupsize>minsize)
+    return true;
+  else
+  {
+    if (!complex)
+      return false;
+    //complex
+    if (groupsize<4) return false; //no complex handling necessary
+    int pseudoends=4-usedneighbours-usedneighbours;
+    for (int i=0;i<groups_used_num;i++)
+    {
+        pseudoends+=groups_used[i]->numOfPseudoEnds();
+        //fprintf(stderr,"-- %d\n",groups_used[i]->numOfPseudoEnds());
+    }
+    //now we know the pseudoends of the group and can check if it is a good or bad form
+    //fprintf(stderr,"complex self atari checked stones %d pseudoends %d bent4indicator %d\n",groupsize,pseudoends,groupbent4indicator);
+    if (groupsize==5 && pseudoends!=10)
+      return true; //do only play XXX
+                   //             XX   form
+    ///
+    //  
+    //  bent 4 handling in the corner not ok     
+    // 
+    //fprintf(stderr,"debug boardsize must be 9 selfatari 4 or 5 at %s with attached %s\n",move.toString (9).c_str(),Go::Position::pos2string(attach_group_pos,9).c_str());
+    if (groupsize==4)
+    {
+      //here allow play of bent 4 in the corner
+      if (groupbent4indicator==4)
+        return false; //this is bent 4 in the corner or   
+                      // XX
+                      // XX in the corner, which is ok too
+      if (attach_group_pos>=0) 
+      {
+        int nattached=0;
+        foreach_adjacent(attach_group_pos,p,{
+          if (this->getColor(p)==col)
+            nattached++;
+        });
+        if (nattached!=2 && pseudoends!=8)
+          return true; //do only play XX   XXX
+                       //             XX    X
+      }
+     }
+                                          
+    return false;
+  }
+};
       /** Determine is the given move is an atari. */
-      bool isAtari(Go::Move move) const;
+      bool isAtari(Go::Move move, int *groupsize=NULL) const;
+      bool isAtari(Go::Move move, int *groupsize, int other_not) const;
       /** Get the distance from the given position to the board edge. */
       int getDistanceToBorder(int pos) const;
       /** Get the manhattan distance between two positions. */
+      int getMaxDistance(int pos1, int pos2) const;
       int getRectDistance(int pos1, int pos2) const;
-      int getPseudoDistanceToBorder(int pos) const;
+      inline int getPseudoDistanceToBorder(int pos) const
+      {
+        int x=Go::Position::pos2x(pos,size);
+        int y=Go::Position::pos2y(pos,size);
+        int ix=(size-x-1);
+        int iy=(size-y-1);
+        
+        int distx=x;
+        int disty=y;
+        if (ix<distx)
+          distx=ix;
+        if (iy<disty)
+          disty=iy;
+        
+        return distx+disty;
+      };
       /** Get the circular distance between two positions. */
       int getCircularDistance(int pos1, int pos2) const;
       /** Get the CFG distances from the given position. */
@@ -686,10 +939,17 @@ namespace Go
        * Used for the nakade heuristic.
        * If there is not such position, -1 is returned.
        */
-      int getThreeEmptyGroupCenterFrom(int pos) const;
-      int getBent4EmptyGroupCenterFrom(int pos,bool onlycheck=false) const;
-      int getFourEmptyGroupCenterFrom(int pos) const;
-      int getFiveEmptyGroupCenterFrom(int pos) const;
+      int getOtherOfEmptyTwoGroup(int pos) const;
+      int getThreeEmptyGroupCenterFrom(int pos) const __attribute__((hot));
+      int getBent4EmptyGroupCenterFrom(int pos,bool onlycheck=false) const __attribute__((hot));
+      int getFourEmptyGroupCenterFrom(int pos) const __attribute__((hot));
+      int getFiveEmptyGroupCenterFrom(int pos) const __attribute__((hot));
+
+      bool isThreeEmptyGroupCenterFrom(int pos) const;
+      int  getSecondBent4Position(int pos) const;
+      bool isBent4EmptyGroupCenterFrom(int pos) const;
+      bool isFourEmptyGroupCenterFrom(int pos) const;
+      bool isFiveEmptyGroupCenterFrom(int pos) const;
       
       /** Compute the Zobrist hash for this board. */
       Go::ZobristHash getZobristHash(Go::ZobristTable *table) const;
@@ -698,7 +958,7 @@ namespace Go
       Go::Color getScoredOwner(int pos) const;
       /** Update the given territory map. */
       void updateTerritoryMap(Go::TerritoryMap *tmap) const;
-      void updateCorrelationMap(Go::ObjectBoard<Go::CorrelationData> *correlationmap, Go::BitBoard *blacklist,Go::BitBoard *whitelist);
+      void updateCorrelationMap(Go::ObjectBoard<Go::CorrelationData> *correlationmap, Go::IntBoard *blacklist,Go::IntBoard *whitelist);
       /** Determine if a stone is alive, according to the given territory map and threshold. */
       bool isAlive(Go::TerritoryMap *tmap, float threshold, int pos) const;
       /** Get the territory score using the given territory map and threshold. */
@@ -714,11 +974,14 @@ namespace Go
       bool isProbableWorkingLadder(Go::Group *group) const;
       /** Determine if the ladder that exists after the move is made works or is broken in most cases. */
       bool isProbableWorkingLadderAfter(Go::Group *group, Go::Move move) const;
-   
+      void updateFeatureGammas(bool both=false);
+      inline int getPseudoLiberties(int pos) const { if (data[pos].group==NULL) return 0; else return data[pos].group->find()->numOfPseudoLiberties(); };
+      
     private:
       const int size;
       const int sizesq;
       const int sizedata;
+      int nextprime;
       Go::Vertex *const data;
       std::ourset<Go::Group*> groups;
       int movesmade,passesplayed;
@@ -751,7 +1014,6 @@ namespace Go
       inline Go::Group *getGroupWithoutFind(int pos) const { return data[pos].group; };
       inline void setColor(int pos, Go::Color col) { data[pos].color=col; if (markchanges) { lastchanges->set(pos); } };
       inline void setGroup(int pos, Go::Group *grp) { data[pos].group=grp; };
-      inline int getPseudoLiberties(int pos) const { if (data[pos].group==NULL) return 0; else return data[pos].group->find()->numOfPseudoLiberties(); };
       inline int getGroupSize(int pos) const { if (data[pos].group==NULL) return 0; else return data[pos].group->find()->numOfStones(); };
       
       bool touchingAtLeastOneEmpty(int pos) const;
@@ -759,14 +1021,17 @@ namespace Go
       void refreshGroups();
       void spreadGroup(int pos, Go::Group *group);
       int removeGroup(Go::Group *group);
-      void spreadRemoveStones(Go::Color col, int pos, std::list<int,Go::allocator_int> *possiblesuicides);
+      void spreadRemoveStones(Go::Color col, int pos, list_int *possiblesuicides);
       void mergeGroups(Go::Group *first, Go::Group *second);
       
       bool validMoveCheck(Go::Move move) const;
+      bool validMoveCheck(Go::Color col, int pos) const;
       void refreshValidMoves();
       void refreshValidMoves(Go::Color col);
       void addValidMove(Go::Move move);
+      void addValidMove(Go::Color col, int pos);
       void removeValidMove(Go::Move move);
+      void removeValidMove(Go::Color col, int pos);
       
       bool hasSymmetryVertical() const;
       bool hasSymmetryHorizontal() const;
@@ -779,7 +1044,6 @@ namespace Go
       bool isProbableWorkingLadder(Go::Group *group, int posA, int movepos=-1) const;
       
       void refreshFeatureGammas();
-      void updateFeatureGammas();
       void updateFeatureGamma(Go::ObjectBoard<int> *cfglastdist, Go::ObjectBoard<int> *cfgsecondlastdist, int pos);
       void updateFeatureGamma(Go::ObjectBoard<int> *cfglastdist, Go::ObjectBoard<int> *cfgsecondlastdist, Go::Color col, int pos);
   };
