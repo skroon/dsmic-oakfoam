@@ -5,6 +5,7 @@ syntax: glob
 *.Po
 *.tmp
 *.swp
+compile
 
 syntax: regexp
 ^oakfoam$

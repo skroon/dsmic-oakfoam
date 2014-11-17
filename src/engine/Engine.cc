@@ -5575,8 +5575,9 @@ void Engine::ponderThread(Worker::Settings *settings)
   
   if (params->move_policy==Parameters::MP_UCT || params->move_policy==Parameters::MP_ONEPLY)
   {
-    fprintf(stderr,"pondering thread starting! %d rank %d stoppondering %d stopthinking %d\n",settings->thread->getID(),mpirank,stoppondering,stopthinking);
+    fprintf(stderr,"pondering thread starting! %d stoppondering %d stopthinking %d\n",settings->thread->getID(),stoppondering,stopthinking);
     #ifdef HAVE_MPI
+      fprintf(stderr,"pondering thread rank %d\n",mpirank);
       bool mpi_inform_others=true;
       bool mpi_rank_other=(mpirank!=0);
       //int mpi_update_num=0;
