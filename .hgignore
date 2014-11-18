@@ -24,6 +24,7 @@ syntax: regexp
 (^|/)ltmain\.sh$
 (^|/)missing$
 
+^config.h$
 ^config.h.in$
 ^oakfoam$
 ^oakfoam.exe$
