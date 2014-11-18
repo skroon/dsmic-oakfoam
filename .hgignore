@@ -5,16 +5,30 @@ syntax: glob
 *.Po
 *.tmp
 *.swp
-compile
 
 syntax: regexp
+# autotools
+# Partial, courtesy of https://bitbucket.org/binki/autotools-hgignore
+(^|/)\.deps$
+(^|/)\.dirstamp$
+(^|/)Makefile(\.in)?$
+(^|/)autom4te\.cache$
+(^|/)aclocal\.m4$
+(^|/)ar-lib$
+(^|/)compile$
+(^|/)config\.(guess|log|status|sub)$
+(^|/)configure$
+(^|/)depcomp$
+(^|/)install-sh$
+(^|/)libtool$
+(^|/)ltmain\.sh$
+(^|/)missing$
+
+^config.h.in$
 ^oakfoam$
 ^oakfoam.exe$
 ^oakfoam_.*\.(tar\.gz|zip|exe|deb)$
-^Makefile$
-^config\..*$
 ^stamp-h1$
-^autom4te.cache/.*$
 ^trials/.*$
 ^gomill/.*$
 ^callgrind\.out\..*$

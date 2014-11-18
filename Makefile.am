@@ -20,7 +20,7 @@ oakfoam_SOURCES     = build.h \
                       src/web/Web.h src/web/Web.cc \
                       src/gtp/Gtp.h src/gtp/Gtp.cc
 oakfoam_CPPFLAGS    = $(BOOST_CPPFLAGS) $(MPI_CPPFLAGS)
-oakfoam_LDFLAGS     = $(BOOST_LDFLAGS) $(MPI_LDFLAGS) $(HOARD_LDFLAGS)
+oakfoam_LDFLAGS     = $(CFLAGS) $(PTHREAD_CFLAGS) $(LDFLAGS) $(BOOST_LDFLAGS) $(MPI_LDFLAGS) $(HOARD_LDFLAGS) $(PTHREAD_LIBS) $(LIBS)
 oakfoam_LDADD       = $(BOOST_SYSTEM_LIB) $(BOOST_THREAD_LIB) $(BOOST_FILESYSTEM_LIB) $(BOOST_ASIO_LIB) $(HOARD_LIB)
 dist_noinst_SCRIPTS = autogen.sh build-linux.sh
 EXTRA_DIST          = regression/sgf regression/*.sh regression/*.suite regression/*.tst \

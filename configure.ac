@@ -9,12 +9,17 @@ AC_PROG_CXX_C_O
 AC_PROG_INSTALL
 AC_LANG(C++)
 
+m4_include([m4/ax_pthread.m4])
 m4_include([m4/ax_boost_base.m4])
 m4_include([m4/ax_boost_system.m4])
 m4_include([m4/ax_boost_thread.m4])
 m4_include([m4/ax_boost_filesystem.m4])
-
 m4_include([m4/ax_mpi.m4])
+
+AX_PTHREAD
+LIBS="$PTHREAD_LIBS $LIBS"
+CFLAGS="$CFLAGS $PTHREAD_CFLAGS"
+CC="$PTHREAD_CC"
 
 AC_ARG_WITH(hoard, [AS_HELP_STRING([--with-hoard=<srcdir>],
    [Compile using the Hoard memory allocator. Default: no])
